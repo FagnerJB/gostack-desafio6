@@ -8,36 +8,33 @@ import CreateTransactionService from '../services/CreateTransactionService';
 class ImportTransactionsService {
    async execute(fileCsv: string): Promise<Transaction[]> {
 
-      const csvFilePath = path.resolve(__dirname, '..', '..', 'tmp', fileCsv);
-
-      const readCSVStream = fs.createReadStream(csvFilePath);
-
-      const parseStream = csvParse({
-         from_line: 2,
-         ltrim: true,
-         rtrim: true,
-      });
-
-      const parseCSV = readCSVStream.pipe(parseStream);
-
-      const transactions = [] as Transaction[]
-
+      const lines = [] as any[]
       const createTransaction = new CreateTransactionService()
+      const csvFilePath = path.resolve(__dirname, '..', '..', 'tmp', fileCsv)
 
-      parseCSV.on('data', async (line) => {
+      await new Promise((resolve) => {
 
-         const transaction = await createTransaction.execute({
+         fs.createReadStream(csvFilePath)
+            .pipe(csvParse({
+               from_line: 2,
+               ltrim: true,
+               rtrim: true,
+            }))
+            .on('data', (line) => lines.push(line))
+            .on('end', resolve)
+
+      })
+
+
+      const transactions = lines.map(async (line) => {
+
+         return await createTransaction.execute({
             title: line[0], type: line[1], value: line[2], category: line[3]
          })
-         transactions.push(transaction)
 
-      });
+      })
 
-      await new Promise(resolve => {
-         parseCSV.on('end', resolve);
-      });
-
-      return transactions;
+      return await Promise.all(transactions)
    }
 }
 
