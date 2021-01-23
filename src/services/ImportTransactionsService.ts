@@ -1,15 +1,27 @@
-import Transaction from '../models/Transaction';
 import csvParse from 'csv-parse';
 import fs from 'fs';
 import path from 'path';
+import { In, getRepository, getCustomRepository } from 'typeorm';
 
-import CreateTransactionService from '../services/CreateTransactionService';
+import Category from '../models/Category'
+import Transaction from '../models/Transaction'
+import TransactionsRepository from '../repositories/TransactionsRepository'
+
+interface transactionI {
+   title: string,
+   type: 'income' | 'outcome'
+   value: number
+   category: string
+}
 
 class ImportTransactionsService {
-   async execute(fileCsv: string): Promise<Transaction[]> {
+   public async execute(fileCsv: string): Promise<Transaction[]> {
 
-      const lines = [] as any[]
-      const createTransaction = new CreateTransactionService()
+      const categoriesRepository = getRepository(Category)
+      const transactionsRepository = getCustomRepository(TransactionsRepository)
+
+      const gotCategories = [] as string[]
+      const gotTransactions = [] as transactionI[]
       const csvFilePath = path.resolve(__dirname, '..', '..', 'tmp', fileCsv)
 
       await new Promise((resolve) => {
@@ -20,21 +32,47 @@ class ImportTransactionsService {
                ltrim: true,
                rtrim: true,
             }))
-            .on('data', (line) => lines.push(line))
+            .on('data', async line => {
+               const [title, type, value, category] = line
+
+               gotCategories.push(category)
+               gotTransactions.push({ title, type, value, category })
+
+            })
             .on('end', resolve)
 
       })
 
-
-      const transactions = lines.map(async (line) => {
-
-         return await createTransaction.execute({
-            title: line[0], type: line[1], value: line[2], category: line[3]
-         })
-
+      const dbCategories = await categoriesRepository.find({
+         where: {
+            title: In(gotCategories)
+         }
       })
 
-      return await Promise.all(transactions)
+      const dbCategoriesTitles = dbCategories.map((category: Category) => category.title)
+
+      const newCategoriesTitles = gotCategories.filter((category) => !dbCategoriesTitles.includes(category)).filter((value, index, self) => self.indexOf(value) === index)
+
+      const newCategories = categoriesRepository.create(
+         newCategoriesTitles.map(category => ({ title: category }))
+      )
+
+      await categoriesRepository.save(newCategories)
+
+      const allCategories = [...dbCategories, ...newCategories]
+
+      const transactions = transactionsRepository.create(
+         gotTransactions.map(transaction => ({
+            title: transaction.title,
+            value: transaction.value,
+            type: transaction.type,
+            category: allCategories.find(category => transaction.category === category.title)
+         }))
+      )
+
+      await transactionsRepository.save(transactions)
+
+      return transactions
    }
 }
 
